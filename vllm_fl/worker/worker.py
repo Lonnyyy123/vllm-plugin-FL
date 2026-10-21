@@ -422,6 +422,17 @@ class WorkerFL(WorkerBase):
 
         current_platform.check_if_supports_dtype(self.model_config.dtype)
 
+        if (
+            getattr(current_platform, "vendor_name", "") == "iluvatar"
+            and "BI-V150" in torch.cuda.get_device_name(self.device)
+        ):
+            from vllm_fl.dispatch.backends.vendor.iluvatar.impl.paged_prefill import (
+                register_paged_prefill,
+            )
+
+            if register_paged_prefill():
+                logger.info("Registered Iluvatar paged prefill optimization")
+
         # Initialize the distributed environment BEFORE taking
         # memory snapshot
         # This ensures NCCL buffers are allocated before we measure
