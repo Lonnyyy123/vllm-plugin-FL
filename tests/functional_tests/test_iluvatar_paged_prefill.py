@@ -158,6 +158,28 @@ def test_first_prefill_chunk(attention, page):
     )
 
 
+@pytest.mark.slow
+def test_kv_addresses_beyond_signed_int32(attention):
+    # Only the final two pages are read. The large allocation ensures that
+    # physical page * stride must be evaluated with a 64-bit integer.
+    torch.cuda.empty_cache()
+    if torch.cuda.mem_get_info()[0] < 9 * 1024**3:
+        pytest.skip("requires 9 GiB free for a large-address regression")
+    pages = 2**31 // (16 * 2 * 128) + 2
+    case = make_case([17], [17])
+    case["k"] = torch.empty(pages, 16, 2, 128, device="cuda", dtype=torch.bfloat16)
+    case["v"] = torch.empty_like(case["k"])
+    case["k"][-2:].normal_()
+    case["v"][-2:].normal_()
+    case["block_table"][0, :2] = torch.tensor(
+        [pages - 1, pages - 2], device="cuda", dtype=torch.int32
+    )
+    attention(**case)
+    torch.testing.assert_close(
+        case["out"], reference(case, [17], [17]), atol=0.016, rtol=0.016
+    )
+
+
 def test_registration_is_idempotent_and_respects_batch_invariance(
     attention, monkeypatch
 ):

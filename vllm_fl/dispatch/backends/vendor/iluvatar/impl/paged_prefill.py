@@ -72,7 +72,7 @@ def paged_prefill_kernel(
             PAGES + seq * PAGE_STRIDE + pos // PAGE_SIZE,
             mask=pos < kv_len,
             other=0,
-        )
+        ).to(tl.int64)
         key = tl.load(
             K
             + page[None, :] * K0
