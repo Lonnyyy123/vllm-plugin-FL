@@ -26,7 +26,8 @@ remain in place. No serving or benchmark option is added or changed.
   non-contiguous query/output token strides are supported.
 
 Other cases call the original implementation with the original arguments.
-Pure decode continues to use the original implementation. Registration is
+This wrapper leaves pure decode to its fallback. The separate
+[`PAGED_DECODE.md`](PAGED_DECODE.md) wrapper may specialize that path. Registration is
 idempotent and is skipped when vLLM batch invariance is enabled. BF16 ignores
 the K/V descale tensors passed by vLLM, as does the original BF16 path.
 
