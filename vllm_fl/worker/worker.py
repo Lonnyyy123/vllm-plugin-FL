@@ -440,6 +440,13 @@ class WorkerFL(WorkerBase):
             if register_paged_decode():
                 logger.info("Registered Iluvatar paged decode optimization")
 
+            from vllm_fl.dispatch.backends.vendor.iluvatar.impl.top_p import (
+                register_row_local_top_p,
+            )
+
+            if register_row_local_top_p():
+                logger.info("Registered Iluvatar row-local top-p filtering")
+
         # Initialize the distributed environment BEFORE taking
         # memory snapshot
         # This ensures NCCL buffers are allocated before we measure
