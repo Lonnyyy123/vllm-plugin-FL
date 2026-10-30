@@ -9,12 +9,16 @@
 import torch
 import vllm.v1.sample.ops.topk_topp_sampler as topk_topp_sampler
 
+from ..impl.sampling import apply_top_k_top_p_int32, supports_int32_filter
+
 
 def _apply_top_k_top_p_no_triton(
     logits: torch.Tensor, k: torch.Tensor | None, p: torch.Tensor | None
 ) -> torch.Tensor:
     if p is None and k is None:
         return logits
+    if supports_int32_filter(logits, k, p):
+        return apply_top_k_top_p_int32(logits, k, p)
     return topk_topp_sampler.apply_top_k_top_p_pytorch(logits, k, p)
 
 
