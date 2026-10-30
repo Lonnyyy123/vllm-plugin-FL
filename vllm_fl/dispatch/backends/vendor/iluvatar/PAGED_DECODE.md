@@ -5,7 +5,8 @@ sequences. For single-token GQA decode this implementation instead launches
 one CTA per sequence, KV head, and existing KV segment. Each CTA loads the
 query index directly from cumulative sequence lengths and computes all eight
 query heads sharing that KV head. This removes the sequence lookup and generic
-query-block mapping while preserving the backend's 16-way segmented softmax.
+query-block mapping while retaining the backend's segmented-softmax interface
+and scratch allocation.
 
 Each segment writes an unnormalized FP32 accumulator, running maximum, and
 denominator into the existing backend scratch tensors. A separate reduction
@@ -86,6 +87,32 @@ These single-wave screens do not establish a stable gain or replace the
 official multi-round 4k/16k and MATH acceptance run. Keep the prior revision
 available until the combined candidate passes those gates. Reverting the
 independent delayed-V commit restores the previous load ordering and tile.
+
+## Internal segment count and KV caching
+
+The backend still supplies 16-segment scratch buffers and its existing
+threshold. With at least 32 sequence/KV-head pairs, the wrapper now computes
+four active segments and merges only those four. The scratch allocation and
+strides do not change; unused capacity is never read. Both KV loads use the
+`.cg` cache hint on this path. Smaller grids retain 16 segments and the
+previous cache policy. This keeps at least 128 CTAs in the compact grid on
+BI-V150, which reports 16 multiprocessors.
+
+An unconditional four-segment version regressed at eight queries with 16k
+KV, so the grid-size guard is part of the implementation. In a nine-shape
+CUDA Graph confirmation, the guarded version preserved the small-grid cases,
+sped up 64 queries with 4k KV by about 6.2%, and improved the measured large
+16k cases by about 1.5-2.3%. FP32 softmax and accumulation are retained;
+partitioning changes floating-point reduction grouping. All 26 decode tests
+passed, including updated CUDA Graph metadata at 4 and 32 sequences.
+
+One 4k candidate wave measured 1812.01 total tok/s against the immediately
+preceding delayed-V wave's 1782.75 (+1.64%). Mean/median/p99 TTFT decreased.
+The reference was reused to avoid another identical control run; both waves
+had 64 successful requests with unchanged serving and benchmark parameters.
+The two changes together measured +3.28% over the earlier 1754.52 control,
+with all three TTFT values within +1%. These remain single-wave screening
+results, pending the combined official throughput and MATH gates.
 
 ## Validation and rollback
 

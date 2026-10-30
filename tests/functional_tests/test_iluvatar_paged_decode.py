@@ -61,24 +61,31 @@ def test_decode(attention, strided, qlens, klens):
     )
 
 
-def test_graph_replay_updates_lengths_and_padding(attention):
-    qlens, klens = [1] * 4, [4097, 33, 1, 257]
+@pytest.mark.parametrize("batch", [4, 32])
+def test_graph_replay_updates_lengths_and_padding(attention, batch):
+    qlens = [1] * batch
+    klens = [4097, 33, 1, 257] + [17] * (batch - 4)
     case = scratch(make_case(qlens, klens, strided=True))
-    # Reserve four query slots, initially only three are active. Empty
+    # Reserve query slots with one initially inactive sequence. Empty
     # sequences must neither consume a query slot nor overwrite another.
-    case["cu_seqlens_q"].copy_(
-        torch.tensor([0, 1, 2, 2, 3], device="cuda", dtype=torch.int32)
-    )
+    cumulative = torch.arange(batch + 1, device="cuda", dtype=torch.int32)
+    cumulative[3:] -= 1
+    case["cu_seqlens_q"].copy_(cumulative)
     attention(**case)
     graph = torch.cuda.CUDAGraph()
     with torch.cuda.graph(graph):
         attention(**case)
-    case["cu_seqlens_q"].copy_(torch.arange(5, device="cuda", dtype=torch.int32))
+    case["cu_seqlens_q"].copy_(
+        torch.arange(batch + 1, device="cuda", dtype=torch.int32)
+    )
     case["seqused_k"][0] = 1025
     case["q"].mul_(0.5)
     graph.replay()
     torch.testing.assert_close(
-        case["out"], reference(case, qlens, [1025, 33, 1, 257]), atol=0.016, rtol=0.016
+        case["out"],
+        reference(case, qlens, [1025, *klens[1:]]),
+        atol=0.016,
+        rtol=0.016,
     )
 
 

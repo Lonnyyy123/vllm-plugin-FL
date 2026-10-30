@@ -49,6 +49,7 @@ def paged_decode_kernel(
     GROUP: tl.constexpr,
     SEGMENTS: tl.constexpr,
     BN: tl.constexpr,
+    CACHE_MODIFIER: tl.constexpr,
 ):
     seq, kv_head, segment = tl.program_id(0), tl.program_id(1), tl.program_id(2)
     query_index = tl.load(CU + seq)
@@ -84,6 +85,7 @@ def paged_decode_kernel(
             + dims[:, None],
             mask=pos[None, :] < length,
             other=0,
+            cache_modifier=CACHE_MODIFIER,
         )
         scores = tl.dot(query, key) * scale
         scores = tl.where(pos[None, :] < length, scores, -float("inf"))
@@ -101,6 +103,7 @@ def paged_decode_kernel(
             + dims[None, :],
             mask=pos[:, None] < length,
             other=0,
+            cache_modifier=CACHE_MODIFIER,
         )
         accumulator += tl.dot(probabilities.to(value.dtype), value)
         maximum = new_maximum
@@ -248,8 +251,13 @@ def make_decode_attention(original, *, tile_size=32):
                 *args,
                 **kwargs,
             )
+        # Retain sequence/KV-head parallelism on BI-V150's 16 multiprocessors.
+        # Four segments give at least 128 CTAs with 32 sequence/KV-head pairs.
+        compact = seqused_k.numel() * k.shape[2] >= 32
+        kernel_segments = 4 if compact else segments
+        cache_modifier = ".cg" if compact else ""
         strides = (*partial.stride()[:3], *maxima.stride(), *denominators.stride())
-        paged_decode_kernel[(seqused_k.numel(), k.shape[2], segments)](
+        paged_decode_kernel[(seqused_k.numel(), k.shape[2], kernel_segments)](
             q,
             k,
             v,
@@ -268,8 +276,9 @@ def make_decode_attention(original, *, tile_size=32):
             block_table.stride(0),
             k.shape[1],
             8,
-            segments,
+            kernel_segments,
             tile_size,
+            cache_modifier,
             num_warps=4,
             num_stages=1,
         )
@@ -282,7 +291,7 @@ def make_decode_attention(original, *, tile_size=32):
             *strides,
             out.stride(0),
             out.stride(1),
-            segments,
+            kernel_segments,
             num_warps=4,
         )
 
