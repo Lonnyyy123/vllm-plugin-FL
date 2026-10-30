@@ -85,6 +85,14 @@ def paged_decode_kernel(
             mask=pos[None, :] < length,
             other=0,
         )
+        scores = tl.dot(query, key) * scale
+        scores = tl.where(pos[None, :] < length, scores, -float("inf"))
+        new_maximum = tl.maximum(maximum, tl.max(scores, 1))
+        probabilities = tl.exp(scores - new_maximum[:, None])
+        correction = tl.exp(maximum - new_maximum)
+        denominator = denominator * correction + tl.sum(probabilities, 1)
+        accumulator = accumulator * correction[:, None]
+        # Shorten the overlap between K and V staging before the PV product.
         value = tl.load(
             V
             + page[:, None] * V0
@@ -94,13 +102,6 @@ def paged_decode_kernel(
             mask=pos[:, None] < length,
             other=0,
         )
-        scores = tl.dot(query, key) * scale
-        scores = tl.where(pos[None, :] < length, scores, -float("inf"))
-        new_maximum = tl.maximum(maximum, tl.max(scores, 1))
-        probabilities = tl.exp(scores - new_maximum[:, None])
-        correction = tl.exp(maximum - new_maximum)
-        denominator = denominator * correction + tl.sum(probabilities, 1)
-        accumulator = accumulator * correction[:, None]
         accumulator += tl.dot(probabilities.to(value.dtype), value)
         maximum = new_maximum
     tl.store(
@@ -160,7 +161,7 @@ def merge_decode_segments(
     tl.store(OUT + query_index * O0 + head * O1 + dims, output)
 
 
-def make_decode_attention(original, *, tile_size=16):
+def make_decode_attention(original, *, tile_size=32):
     if tile_size not in (16, 32, 64, 128):
         raise ValueError("unsupported decode KV tile")
 

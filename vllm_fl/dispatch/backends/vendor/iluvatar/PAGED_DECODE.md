@@ -29,9 +29,9 @@ Registration is idempotent and disabled under vLLM batch invariance.
 This does not change attention precision, KV allocation, serving parameters,
 benchmark inputs, or sampling. The prefill and decode kernels remain separate.
 
-## Tile selection and measured operator results
+## Original tile selection and measured operator results
 
-The default KV tile has 16 columns. An offline comparison on BI-V150 tested
+The initial implementation used a 16-column KV tile. An offline comparison on BI-V150 tested
 16/32/64/128 columns, with two KV allocations, CUDA Graph replay, graph-external
 events, 12 timing samples, and an independent FP32 attention reference. Wider
 tiles were not uniformly faster: 64 columns provided almost no gain in the
@@ -50,6 +50,42 @@ short and long cases without selecting benchmark-specific lengths or batches.
 These are operator measurements, not official model throughput or accuracy.
 Full official throughput, TTFT comparison, and MATH-500 Level 3 evaluation
 must pass before treating this as a validated contest submission.
+
+## Delayed V staging and the 32-column tile
+
+The current kernel loads V after the QK product and online-softmax update.
+This shortens the live overlap of K and V staging before the PV product; the
+softmax arithmetic and FP32 accumulator are unchanged. With this ordering,
+the default KV tile is now 32 columns. The measured compiled kernel uses
+12 KiB of shared memory, 95 registers, and no spills on BI-V150.
+
+On 2026-10-30, with plugin reference `e297acf` and FlagGems `e303ca56`, CUDA
+Graph microbenchmarks used two independent KV allocations with model Q/K/V
+strides and 12 interleaved timing samples per version:
+
+| Queries | KV length | Previous median | Delayed V, tile 32 |
+|---:|---:|---:|---:|
+| 1 | 17 | 0.01173 ms | 0.01321 ms |
+| 8 | 257 | 0.02548 ms | 0.02799 ms |
+| 31 | 4096 | 0.60126 ms | 0.53992 ms |
+| 64 | 4096 | 1.21508 ms | 1.09551 ms |
+| 64 | 4609 | 1.35840 ms | 1.22065 ms |
+
+The change favors the larger decode workload; the short-context, small-batch
+cases above regress. All 25 decode tests passed, including strided tensors,
+tail pages, empty sequences, updated CUDA Graph inputs and fallback routing.
+
+One fresh-server 4k wave per version, 64 requests with 4096 input and 1024
+output tokens at concurrency 64, measured 1754.52 -> 1782.75 total tok/s
+(+1.61%). Mean TTFT changed from 25671.71 to 25915.06 ms (+0.948%); median
+and p99 TTFT also remained within +1%. Both versions completed all requests.
+Only this decode source differed; serving and benchmark parameters matched.
+An earlier screen on the image FlagGems baseline measured +3.25% throughput.
+
+These single-wave screens do not establish a stable gain or replace the
+official multi-round 4k/16k and MATH acceptance run. Keep the prior revision
+available until the combined candidate passes those gates. Reverting the
+independent delayed-V commit restores the previous load ordering and tile.
 
 ## Validation and rollback
 
